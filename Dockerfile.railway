@@ -6,31 +6,59 @@
 # monorepo. Railway selects this file through the RAILWAY_DOCKERFILE_PATH
 # service variable (set in .railway/railway.ts). See docs/install/railway.mdx.
 #
+# The default base is the `-browser` variant, which bakes in Chromium and Xvfb
+# so the agent's browser tool works on a headless server. Use the plain tag
+# (ghcr.io/openclaw/openclaw:<version>) for a smaller image without a browser.
+#
 # To deploy a locally built image instead of the published one:
 #   docker build -t my-openclaw .
 #   docker build --build-arg OPENCLAW_BASE_IMAGE=my-openclaw -f Dockerfile.railway .
-ARG OPENCLAW_BASE_IMAGE="ghcr.io/openclaw/openclaw:2026.9.2"
+ARG OPENCLAW_BASE_IMAGE="ghcr.io/openclaw/openclaw:2026.9.2-browser"
 FROM ${OPENCLAW_BASE_IMAGE}
 
 # The entrypoint starts as root only to chown the Railway volume, then drops to
 # the image's unprivileged `node` user before running anything else.
 USER root
 
+# gog: the Google Workspace CLI behind the bundled `gog` skill (Sheets, Drive,
+# Docs, Gmail, Calendar). Pinned release with per-architecture checksums;
+# TARGETARCH is provided by BuildKit.
+ARG TARGETARCH
+ARG GOG_VERSION=0.39.1
+ARG GOG_SHA256_AMD64=438efa460b8291f023299ad2ed5610701cad7508db88392039c0891e2175e3b1
+ARG GOG_SHA256_ARM64=7c23b402c9234ba476e84b39ac6d875444b47ec516312a99e877e1386ba28295
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) sha="$GOG_SHA256_AMD64" ;; \
+      arm64) sha="$GOG_SHA256_ARM64" ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 3 -o /tmp/gog.tar.gz \
+      "https://github.com/openclaw/gogcli/releases/download/v${GOG_VERSION}/gogcli_${GOG_VERSION}_linux_${TARGETARCH:-amd64}.tar.gz"; \
+    echo "$sha  /tmp/gog.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gog.tar.gz -C /usr/local/bin gog; \
+    chmod 0755 /usr/local/bin/gog; \
+    rm -f /tmp/gog.tar.gz; \
+    /usr/local/bin/gog --version
+
 COPY --chmod=0755 deploy/railway/entrypoint.sh /app/deploy/railway/entrypoint.sh
 COPY --chmod=0644 deploy/railway/bootstrap.mjs /app/deploy/railway/bootstrap.mjs
 
 # HOME is pinned because the root->node privilege drop does not rewrite it.
 # State, config, and workspace live on the Railway volume mounted at /data.
+# gog keeps its OAuth client, tokens, and encrypted file keyring under
+# GOG_HOME on the same volume; the entrypoint supplies GOG_KEYRING_PASSWORD.
 ENV HOME=/home/node \
     OPENCLAW_HOME=/home/node \
     OPENCLAW_STATE_DIR=/data/.openclaw \
     OPENCLAW_CONFIG_PATH=/data/.openclaw/openclaw.json \
     OPENCLAW_WORKSPACE_DIR=/data/workspace \
+    GOG_HOME=/data/gogcli \
+    GOG_KEYRING_BACKEND=file \
     NODE_ENV=production
 
 EXPOSE 8080
 
-# HEALTHCHECK is inherited from the base image (dist/docker-healthcheck.js);
-# Railway itself probes /startupz via railway.json.
+# HEALTHCHECK is inherited from the base image (dist/docker-healthcheck.js).
 ENTRYPOINT ["tini", "-s", "--", "/app/deploy/railway/entrypoint.sh"]
 CMD []

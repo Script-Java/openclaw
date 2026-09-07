@@ -86,12 +86,18 @@ test("buildInitialConfig records origins, publicOrigin, and trusted proxies, kee
       trustedProxies: ["100.64.0.0/10"],
     },
     agents: { defaults: { workspace: "/data/workspace" } },
+    browser: { enabled: true, headless: true, noSandbox: true },
+    tools: { web: { search: { provider: "duckduckgo" } } },
   });
-  assert.equal(
-    buildInitialConfig({ origins: [], workspaceDir: "/w", auth: { mode: "token", source: "env" } })
-      .gateway.trustedProxies,
-    undefined,
-  );
+  const bare = buildInitialConfig({
+    origins: [],
+    workspaceDir: "/w",
+    auth: { mode: "token", source: "env" },
+    containerDefaults: null,
+  });
+  assert.equal(bare.gateway.trustedProxies, undefined);
+  assert.equal(bare.browser, undefined);
+  assert.equal(bare.tools, undefined);
 });
 
 test("buildInitialConfig stores a generated token and enables host-header fallback without origins", () => {
@@ -173,6 +179,50 @@ test("planOriginSync fills trustedProxies only when the key is absent", () => {
   assert.equal(explicitEmpty.changed, false, "an operator-authored empty list is respected");
 });
 
+test("planOriginSync fills container browser and search defaults only where absent", () => {
+  const defaults = {
+    browser: { enabled: true, headless: true, noSandbox: true },
+    webSearchProvider: "duckduckgo",
+  };
+  const base = {
+    gateway: {
+      publicOrigin: "https://a.example.com",
+      trustedProxies: ["100.64.0.0/10"],
+      controlUi: { allowedOrigins: ["https://a.example.com"] },
+    },
+  };
+  const filled = planOriginSync(base, ["https://a.example.com"], {
+    trustedProxies: ["100.64.0.0/10"],
+    containerDefaults: defaults,
+  });
+  assert.equal(filled.changed, true);
+  assert.deepEqual(filled.defaultsApplied, ["browser", "tools.web.search.provider"]);
+  assert.deepEqual(filled.config.browser, defaults.browser);
+  assert.deepEqual(filled.config.tools, { web: { search: { provider: "duckduckgo" } } });
+
+  const operatorOwned = {
+    ...base,
+    browser: { headless: false },
+    tools: { profile: "coding", web: { fetch: { enabled: true }, search: { provider: "brave" } } },
+  };
+  const untouched = planOriginSync(operatorOwned, ["https://a.example.com"], {
+    trustedProxies: ["100.64.0.0/10"],
+    containerDefaults: defaults,
+  });
+  assert.equal(untouched.changed, false);
+  assert.equal(untouched.config, operatorOwned);
+
+  const partialTools = { ...base, tools: { profile: "coding", web: { fetch: { enabled: true } } } };
+  const merged = planOriginSync(partialTools, ["https://a.example.com"], {
+    trustedProxies: ["100.64.0.0/10"],
+    containerDefaults: defaults,
+  });
+  assert.deepEqual(merged.config.tools, {
+    profile: "coding",
+    web: { fetch: { enabled: true }, search: { provider: "duckduckgo" } },
+  });
+});
+
 test("runBootstrap creates, then syncs, then leaves an operator-edited config alone", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-railway-"));
   try {
@@ -198,7 +248,10 @@ test("runBootstrap creates, then syncs, then leaves an operator-edited config al
     assert.equal(synced.action, "updated");
     assert.deepEqual(synced.added, ["https://svc.up.railway.app"]);
     assert.deepEqual(synced.trustedProxies, ["100.64.0.0/10"]);
+    assert.deepEqual(synced.defaultsApplied, [], "defaults were already written at creation");
     const afterSync = readConfigFile(configPath).config;
+    assert.deepEqual(afterSync.browser, { enabled: true, headless: true, noSandbox: true });
+    assert.equal(afterSync.tools.web.search.provider, "duckduckgo");
     assert.deepEqual(afterSync.gateway.controlUi.allowedOrigins, ["https://svc.up.railway.app"]);
     assert.equal(afterSync.gateway.publicOrigin, "https://svc.up.railway.app");
     assert.deepEqual(afterSync.gateway.trustedProxies, ["100.64.0.0/10"]);

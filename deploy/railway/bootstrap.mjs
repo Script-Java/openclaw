@@ -115,8 +115,25 @@ export function resolveAuthPlan(env, generateToken = () => randomBytes(32).toStr
   return { mode: "token", source: "generated", token: generateToken() };
 }
 
+/**
+ * Settings a headless container needs for the agent's browser and web research
+ * to work out of the box. Chromium cannot show a window or use its sandbox
+ * inside the container, and DuckDuckGo is the only key-free search provider.
+ * Applied on first boot and filled in later only where the key is absent.
+ */
+export const CONTAINER_DEFAULTS = {
+  browser: { enabled: true, headless: true, noSandbox: true },
+  webSearchProvider: "duckduckgo",
+};
+
 /** Builds the first `openclaw.json`. Every key here is editable later in the Control UI. */
-export function buildInitialConfig({ origins, workspaceDir, auth, trustedProxies = [] }) {
+export function buildInitialConfig({
+  origins,
+  workspaceDir,
+  auth,
+  trustedProxies = [],
+  containerDefaults = CONTAINER_DEFAULTS,
+}) {
   const controlUi = { enabled: true };
   if (origins.length > 0) {
     controlUi.allowedOrigins = [...origins];
@@ -141,16 +158,28 @@ export function buildInitialConfig({ origins, workspaceDir, auth, trustedProxies
       ...(trustedProxies.length > 0 ? { trustedProxies: [...trustedProxies] } : {}),
     },
     agents: { defaults: { workspace: workspaceDir } },
+    ...(containerDefaults ? containerDefaultsConfig(containerDefaults) : {}),
+  };
+}
+
+function containerDefaultsConfig(defaults) {
+  return {
+    browser: { ...defaults.browser },
+    tools: { web: { search: { provider: defaults.webSearchProvider } } },
   };
 }
 
 /**
  * Computes the additive sync for an existing config: missing browser origins,
- * an unset publicOrigin, and, when the operator never set one, the proxy trust
- * list. Returns the same object when nothing is missing so callers can skip
- * the write.
+ * an unset publicOrigin, and, when the operator never set them, the proxy
+ * trust list and the container browser/search defaults. Returns the same
+ * object when nothing is missing so callers can skip the write.
  */
-export function planOriginSync(config, rawOrigins, { trustedProxies = [] } = {}) {
+export function planOriginSync(
+  config,
+  rawOrigins,
+  { trustedProxies = [], containerDefaults } = {},
+) {
   const origins = [];
   for (const raw of rawOrigins) {
     const origin = normalizeOrigin(raw);
@@ -175,13 +204,39 @@ export function planOriginSync(config, rawOrigins, { trustedProxies = [] } = {})
     gateway.trustedProxies === undefined && trustedProxies.length > 0
       ? [...trustedProxies]
       : undefined;
-  if (missing.length === 0 && !nextPublicOrigin && !nextTrustedProxies) {
+  // Container defaults fill only absent keys: a `browser` block of any shape or
+  // an authored search provider is the operator's choice and stays untouched.
+  const defaultsApplied = [];
+  const nextBrowser =
+    containerDefaults && config.browser === undefined
+      ? { ...containerDefaults.browser }
+      : undefined;
+  if (nextBrowser) {
+    defaultsApplied.push("browser");
+  }
+  const tools = isRecord(config.tools) ? config.tools : {};
+  const toolsWeb = isRecord(tools.web) ? tools.web : {};
+  const toolsWebSearch = isRecord(toolsWeb.search) ? toolsWeb.search : {};
+  const nextSearchProvider =
+    containerDefaults && toolsWebSearch.provider === undefined
+      ? containerDefaults.webSearchProvider
+      : undefined;
+  if (nextSearchProvider) {
+    defaultsApplied.push("tools.web.search.provider");
+  }
+  if (
+    missing.length === 0 &&
+    !nextPublicOrigin &&
+    !nextTrustedProxies &&
+    defaultsApplied.length === 0
+  ) {
     return {
       config,
       changed: false,
       added: [],
       publicOrigin: undefined,
       trustedProxies: undefined,
+      defaultsApplied,
     };
   }
   const next = {
@@ -195,6 +250,15 @@ export function planOriginSync(config, rawOrigins, { trustedProxies = [] } = {})
         ...(missing.length > 0 ? { allowedOrigins: [...existing, ...missing] } : {}),
       },
     },
+    ...(nextBrowser ? { browser: nextBrowser } : {}),
+    ...(nextSearchProvider
+      ? {
+          tools: {
+            ...tools,
+            web: { ...toolsWeb, search: { ...toolsWebSearch, provider: nextSearchProvider } },
+          },
+        }
+      : {}),
   };
   return {
     config: next,
@@ -202,6 +266,7 @@ export function planOriginSync(config, rawOrigins, { trustedProxies = [] } = {})
     added: missing,
     publicOrigin: nextPublicOrigin,
     trustedProxies: nextTrustedProxies,
+    defaultsApplied,
   };
 }
 
@@ -286,7 +351,10 @@ export function runBootstrap({ env = process.env, log = console } = {}) {
     return { action: "created", configPath: paths.configPath, auth: auth.mode, origins };
   }
 
-  const plan = planOriginSync(existing.config, origins, { trustedProxies });
+  const plan = planOriginSync(existing.config, origins, {
+    trustedProxies,
+    containerDefaults: CONTAINER_DEFAULTS,
+  });
   if (plan.changed) {
     writeConfigFile(paths.configPath, plan.config);
     const parts = [];
@@ -298,6 +366,9 @@ export function runBootstrap({ env = process.env, log = console } = {}) {
     }
     if (plan.trustedProxies) {
       parts.push(`set gateway.trustedProxies=${plan.trustedProxies.join(",")}`);
+    }
+    if (plan.defaultsApplied.length > 0) {
+      parts.push(`applied container defaults for ${plan.defaultsApplied.join(", ")}`);
     }
     log.info(`railway-bootstrap: ${parts.join("; ")} in ${paths.configPath}.`);
   }
@@ -315,6 +386,7 @@ export function runBootstrap({ env = process.env, log = console } = {}) {
     added: plan.added,
     publicOrigin: plan.publicOrigin,
     trustedProxies: plan.trustedProxies,
+    defaultsApplied: plan.defaultsApplied,
   };
 }
 

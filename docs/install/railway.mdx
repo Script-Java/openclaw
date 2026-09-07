@@ -19,7 +19,7 @@ There are two ways to get there:
 
 | File                           | Purpose                                                                                                                                                                                                                     |
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Dockerfile.railway`           | `FROM ghcr.io/openclaw/openclaw:<version>` plus the bootstrap; builds in seconds instead of compiling the monorepo                                                                                                          |
+| `Dockerfile.railway`           | `FROM ghcr.io/openclaw/openclaw:<version>-browser` (Chromium included) plus the bootstrap and the `gog` Google Workspace CLI; builds in seconds instead of compiling the monorepo                                           |
 | `deploy/railway/entrypoint.sh` | Hands the root-owned Railway volume to the unprivileged `node` user, keeps auth-profile key material on the volume, clears a gateway lock left by a container Railway stopped uncleanly, then starts the Gateway            |
 | `deploy/railway/bootstrap.mjs` | First boot: writes a minimal, schema-valid `openclaw.json`. Every boot: adds a new Railway or custom domain to the Control UI origin allowlist and trusts Railway's edge proxy range when `gateway.trustedProxies` is unset |
 | `.railway/railway.ts`          | Infrastructure as Code: the `openclaw` service, the `/data` volume, and the `RAILWAY_DOCKERFILE_PATH` build selector                                                                                                        |
@@ -124,6 +124,39 @@ After the first boot the only Railway-side settings are the volume, the port, an
   --fix`. The active config lives at `/data/.openclaw/openclaw.json`.
 </Warning>
 
+### Browser, web search, and Google Sheets
+
+The Railway image is the `-browser` variant of the official image, so Chromium is already installed, and the bootstrap writes `browser.headless` and `browser.noSandbox` for the container. The agent's `browser` tool works without any setup: ask it to open a page and it drives an isolated headless Chromium on the Gateway. The Control UI **Browser** panel shows what it is doing. Screenshots need a vision-capable model; snapshots and page text do not.
+
+Web search defaults to DuckDuckGo, the only key-free provider. For better results, add a [Brave Search](/tools/brave-search) key under **Settings → Config → tools.web.search** or as the `BRAVE_API_KEY` variable.
+
+Google Sheets, Drive, Docs, Gmail, and Calendar go through the `gog` CLI, which is baked into the image and backs the bundled `gog` skill. It talks to Google as you, through your own OAuth client, and keeps its encrypted tokens under `/data/gogcli`, so the authorization survives redeploys. One-time setup:
+
+<Steps>
+  <Step title="Create a Google OAuth client">
+    In [Google Cloud Console](https://console.cloud.google.com/projectcreate) create a project, enable the **Google Sheets API** and **Google Drive API** (plus Docs or Gmail if you want them), configure the OAuth consent screen as **External** with your email, then create an **OAuth client ID** of type **Desktop app** and download its JSON. Under **Audience**, click **Publish app** so refresh tokens do not expire after seven days.
+  </Step>
+
+<Step title="Give the client to the Gateway">
+  Store the downloaded JSON as the `GOG_CLIENT_SECRET_JSON` variable in Railway (paste the whole
+  file as the value). The entrypoint hands it to `gog` on every boot; Railway redeploys when the
+  variable is added.
+</Step>
+
+  <Step title="Authorize your Google account once">
+    From a Railway shell, run the browserless flow. The first command prints a URL; open it on your computer, approve access, and paste the address of the page Google redirects you to into the second command:
+
+    ```bash
+    railway ssh -- sh -c "su node -s /bin/sh -c 'gog auth add you@gmail.com --services sheets,drive --remote --step 1'"
+    railway ssh -- sh -c "su node -s /bin/sh -c 'gog auth add you@gmail.com --services sheets,drive --remote --step 2 --auth-url \"<redirect url>\"'"
+    railway ssh -- sh -c "su node -s /bin/sh -c 'gog auth doctor --check --no-input'"
+    ```
+
+    From then on the agent can read, append, and update sheets by their spreadsheet id. Share a sheet's id with it, or ask it to create one in Drive.
+
+  </Step>
+</Steps>
+
 ### Environment variables
 
 | Variable                          | Required    | Purpose                                                                                                                                                                                                        |
@@ -135,8 +168,10 @@ After the first boot the only Railway-side settings are the volume, the port, an
 | `OPENCLAW_PUBLIC_ORIGIN`          | Optional    | Custom domain origin (`https://claw.example.com`) to allow for the Control UI and use as `gateway.publicOrigin`                                                                                                |
 | `OPENCLAW_CONTROL_UI_ORIGINS`     | Optional    | Comma-separated extra browser origins to allow                                                                                                                                                                 |
 | `OPENCLAW_TRUSTED_PROXIES`        | Optional    | Comma-separated proxy IPs or CIDRs for `gateway.trustedProxies`. Defaults to Railway's edge range `100.64.0.0/10`, without which the Gateway rejects all proxied requests                                      |
-| `OPENCLAW_BASE_IMAGE`             | Optional    | Override the published image the Railway image builds on, for example `ghcr.io/openclaw/openclaw:2026.9.2` or your own build                                                                                   |
+| `OPENCLAW_BASE_IMAGE`             | Optional    | Override the published image the Railway image builds on. Defaults to the `-browser` variant; use `ghcr.io/openclaw/openclaw:2026.9.2` for a smaller image without Chromium, or your own build                 |
 | `OPENCLAW_RAILWAY_SKIP_BOOTSTRAP` | Optional    | Set to `1` to start the Gateway without running the bootstrap                                                                                                                                                  |
+| `GOG_CLIENT_SECRET_JSON`          | Optional    | Google Desktop OAuth client JSON for the `gog` CLI (Sheets, Drive, Docs, Gmail, Calendar); stored for `gog` at every boot                                                                                      |
+| `GOG_KEYRING_PASSWORD`            | Optional    | Password for `gog`'s encrypted token keyring. When unset, one is generated on first boot and kept at `/data/gogcli/.keyring-password`; set it in Railway to keep it off the volume                             |
 
 `RAILWAY_PUBLIC_DOMAIN` is injected by Railway and read by the bootstrap; you do not set it.
 
