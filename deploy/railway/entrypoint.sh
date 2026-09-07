@@ -40,6 +40,17 @@ if [ "$(id -u)" = "0" ]; then
     chown -h node:node "$LEGACY_SECRET_DIR"
   fi
 
+  # A Railway volume attaches to exactly one container, and this container has
+  # just started, so any gateway lock left on it belongs to a previous container
+  # that Railway stopped without a clean shutdown. PIDs restart in every
+  # container, so the stale lock can name a PID that is alive here (the Gateway
+  # itself), which makes the runtime's owner check refuse to start.
+  for lock in "$STATE_DIR"/tmp/openclaw-*/gateway.*.lock; do
+    [ -e "$lock" ] || continue
+    echo "railway-entrypoint: removing stale gateway lock $lock"
+    rm -f "$lock"
+  done
+
   exec setpriv --reuid=node --regid=node --init-groups --inh-caps=-all "$0" "$@"
 fi
 

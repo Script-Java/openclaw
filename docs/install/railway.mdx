@@ -1,5 +1,5 @@
 ---
-summary: "Deploy OpenClaw on Railway from this repository (config as code) or with the one-click template, then configure everything from the Control UI"
+summary: "Deploy OpenClaw on Railway from this repository (Infrastructure as Code) or with the one-click template, then configure everything from the Control UI"
 read_when:
   - Deploying OpenClaw to Railway
   - You want a cloud Gateway you configure entirely from the browser
@@ -10,7 +10,7 @@ Railway runs the Gateway for you and serves the [Control UI](/web/control-ui) on
 
 There are two ways to get there:
 
-- **Deploy from your repository** (recommended): the repo ships `railway.json`, `Dockerfile.railway`, and a first-boot bootstrap under `deploy/railway/`. Railway builds a thin image on top of the official OpenClaw image and the bootstrap writes a working `openclaw.json` to the volume.
+- **Deploy from your repository** (recommended): the repo ships `Dockerfile.railway`, a first-boot bootstrap under `deploy/railway/`, and a Railway Infrastructure as Code file at `.railway/railway.ts`. Railway builds a thin image on top of the official OpenClaw image and the bootstrap writes a working `openclaw.json` to the volume.
 - **One-click template**: the community template, configured through Railway variables.
 
 ## Deploy from your repository
@@ -19,54 +19,51 @@ There are two ways to get there:
 
 | File                           | Purpose                                                                                                                                      |
 | ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `railway.json`                 | Config as code: builds `Dockerfile.railway`, requires a volume at `/data`, probes `/startupz`, restarts on failure, rebuilds only when these files change |
 | `Dockerfile.railway`           | `FROM ghcr.io/openclaw/openclaw:<version>` plus the bootstrap; builds in seconds instead of compiling the monorepo                            |
-| `deploy/railway/entrypoint.sh` | Hands the root-owned Railway volume to the unprivileged `node` user, keeps auth-profile key material on the volume, then starts the Gateway   |
-| `deploy/railway/bootstrap.mjs` | First boot: writes a minimal, schema-valid `openclaw.json`. Every boot: adds a new Railway or custom domain to the Control UI origin allowlist |
+| `deploy/railway/entrypoint.sh` | Hands the root-owned Railway volume to the unprivileged `node` user, keeps auth-profile key material on the volume, clears a gateway lock left by a container Railway stopped uncleanly, then starts the Gateway |
+| `deploy/railway/bootstrap.mjs` | First boot: writes a minimal, schema-valid `openclaw.json`. Every boot: adds a new Railway or custom domain to the Control UI origin allowlist and trusts Railway's edge proxy range when `gateway.trustedProxies` is unset |
+| `.railway/railway.ts`          | Infrastructure as Code: the `openclaw` service, the `/data` volume, and the `RAILWAY_DOCKERFILE_PATH` build selector                          |
 
 The bootstrap never rewrites a setting you changed in the Control UI, and it leaves any config file it cannot parse as plain JSON untouched.
+
+<Note>
+Railway deprecated `railway.json` / `railway.toml` config-as-code: new services cannot use it and existing files stop being read on 2026-12-01. The service settings therefore live in `.railway/railway.ts`, or you set the same two things by hand: the `RAILWAY_DOCKERFILE_PATH=Dockerfile.railway` variable and the `/data` volume. Without the variable Railway builds the root `Dockerfile`, which fails on Railway because it uses BuildKit cache mounts.
+
+Do not configure a Railway healthcheck path. Railway probes only at deploy time, from its edge range without forwarded client headers, and the Gateway rejects that once the range is trusted for real browser traffic (`gateway.trustedProxies`), so the deploy would never go live. The image's own container healthcheck covers liveness.
+</Note>
 
 ### Steps
 
 <Steps>
   <Step title="Push the repository">
-    Push this repository (or your fork) to GitHub. Railway deploys from the branch you select and rebuilds when `railway.json`, `Dockerfile.railway`, or `deploy/railway/**` change.
+    Push this repository (or your fork) to GitHub. Railway deploys from the branch you select.
   </Step>
 
-  <Step title="Create the service">
-    In the Railway dashboard choose **New Project → Deploy from GitHub repo** and select the repository. Railway picks up `railway.json` automatically.
-
-    The first deploy fails on purpose until a volume is attached at `/data` (`deploy.requiredMountPath`). Without a volume, everything you configure in the UI would be lost on the next redeploy.
-
-    With the CLI instead:
+  <Step title="Create the project and service">
+    With the Railway CLI, from the repository root:
 
     ```bash
     railway login
-    railway init
-    railway up --detach
+    railway init --name openclaw
+    railway add --service openclaw --variables "OPENCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32)"
     ```
+
+    The token is your admin secret for the Gateway and Control UI. If you skip it, the bootstrap generates one, stores it in `openclaw.json`, and prints it once in the deploy logs.
 
   </Step>
 
-  <Step title="Attach a volume at /data">
-    **Service → Settings → Volumes → Add volume**, mount path `/data`. Or:
+  <Step title="Apply the infrastructure file">
+    Railway CLI 4.70 or newer evaluates `.railway/railway.ts`. Install the SDK it imports, preview, then apply. This creates the `/data` volume and the `RAILWAY_DOCKERFILE_PATH` variable:
 
     ```bash
-    railway volume add --mount-path /data
+    npm install --no-save railway
+    railway config plan
+    railway config apply
     ```
+
+    On an older CLI, set the same things by hand: **Settings → Volumes → Add volume** at `/data` (or `railway volume add --mount-path /data`) and the variable `RAILWAY_DOCKERFILE_PATH=Dockerfile.railway`.
 
     `openclaw.json`, sessions, auth stores, channel state, and the agent workspace all live under `/data` and survive redeploys.
-
-  </Step>
-
-  <Step title="Set the gateway token">
-    Add the variable `OPENCLAW_GATEWAY_TOKEN` (your admin secret, for example `openssl rand -hex 32`):
-
-    ```bash
-    railway variable set OPENCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32)
-    ```
-
-    If you skip this, the bootstrap generates a token, stores it in `openclaw.json`, and prints it once in the deploy logs.
 
   </Step>
 
@@ -115,11 +112,13 @@ Some Gateway fields can lock you out of the Control UI if changed on Railway: `g
 
 | Variable                          | Required    | Purpose                                                                                                                                  |
 | --------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `RAILWAY_DOCKERFILE_PATH`         | Required    | `Dockerfile.railway`; set by `.railway/railway.ts`. Tells Railway which Dockerfile to build                                              |
 | `OPENCLAW_GATEWAY_TOKEN`          | Recommended | Shared admin secret for the Gateway and Control UI. Without it, a token is generated on first boot, stored in `openclaw.json`, and logged once |
 | `OPENCLAW_GATEWAY_PASSWORD`       | Optional    | Use password auth instead of a token on first boot (only when no token is set)                                                           |
 | `PORT`                            | Optional    | Listening port; defaults to `8080`. Must match the domain's target port                                                                  |
 | `OPENCLAW_PUBLIC_ORIGIN`          | Optional    | Custom domain origin (`https://claw.example.com`) to allow for the Control UI and use as `gateway.publicOrigin`                           |
 | `OPENCLAW_CONTROL_UI_ORIGINS`     | Optional    | Comma-separated extra browser origins to allow                                                                                           |
+| `OPENCLAW_TRUSTED_PROXIES`        | Optional    | Comma-separated proxy IPs or CIDRs for `gateway.trustedProxies`. Defaults to Railway's edge range `100.64.0.0/10`, without which the Gateway rejects all proxied requests |
 | `OPENCLAW_BASE_IMAGE`             | Optional    | Override the published image the Railway image builds on, for example `ghcr.io/openclaw/openclaw:2026.9.2` or your own build             |
 | `OPENCLAW_RAILWAY_SKIP_BOOTSTRAP` | Optional    | Set to `1` to start the Gateway without running the bootstrap                                                                            |
 

@@ -9,8 +9,10 @@
 //   when none exists: local mode, LAN bind, shared-secret auth, and the Railway
 //   public domain as the only allowed Control UI browser origin
 // - on every boot, appends a newly assigned Railway or custom domain to
-//   `gateway.controlUi.allowedOrigins` when it is missing, and fills in
-//   `gateway.publicOrigin` when it is unset
+//   `gateway.controlUi.allowedOrigins` when it is missing, fills in
+//   `gateway.publicOrigin` when it is unset, and fills in
+//   `gateway.trustedProxies` with Railway's edge range when the key is absent
+//   (the Gateway rejects forwarded traffic from an untrusted proxy)
 // - never rewrites a setting an operator changed through the UI, and never
 //   touches a config file it cannot parse as JSON
 //
@@ -76,6 +78,28 @@ export function resolvePublicOrigins(env) {
   return origins;
 }
 
+/**
+ * Railway's HTTP edge reaches the container from the 100.64.0.0/10 range and
+ * adds forwarded client headers. The Gateway rejects proxy-shaped traffic from
+ * an unlisted source, so that range must be trusted for any request to pass.
+ */
+export const RAILWAY_PROXY_CIDRS = ["100.64.0.0/10"];
+
+/** Resolves the proxy sources to trust: an explicit list, else Railway's edge when running on Railway. */
+export function resolveTrustedProxies(env) {
+  const explicit = String(env.OPENCLAW_TRUSTED_PROXIES ?? "")
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (explicit.length > 0) {
+    return explicit;
+  }
+  if (trim(env.RAILWAY_ENVIRONMENT) || trim(env.RAILWAY_PROJECT_ID) || trim(env.RAILWAY_PUBLIC_DOMAIN)) {
+    return [...RAILWAY_PROXY_CIDRS];
+  }
+  return [];
+}
+
 /** Chooses the shared-secret auth mode from the environment the container received. */
 export function resolveAuthPlan(env, generateToken = () => randomBytes(32).toString("hex")) {
   if (trim(env.OPENCLAW_GATEWAY_TOKEN)) {
@@ -88,7 +112,7 @@ export function resolveAuthPlan(env, generateToken = () => randomBytes(32).toStr
 }
 
 /** Builds the first `openclaw.json`. Every key here is editable later in the Control UI. */
-export function buildInitialConfig({ origins, workspaceDir, auth }) {
+export function buildInitialConfig({ origins, workspaceDir, auth, trustedProxies = [] }) {
   const controlUi = { enabled: true };
   if (origins.length > 0) {
     controlUi.allowedOrigins = [...origins];
@@ -110,16 +134,19 @@ export function buildInitialConfig({ origins, workspaceDir, auth }) {
       auth: gatewayAuth,
       controlUi,
       ...(publicOrigin ? { publicOrigin } : {}),
+      ...(trustedProxies.length > 0 ? { trustedProxies: [...trustedProxies] } : {}),
     },
     agents: { defaults: { workspace: workspaceDir } },
   };
 }
 
 /**
- * Computes the additive origin sync for an existing config. Returns the same
- * object when nothing is missing so callers can skip the write.
+ * Computes the additive sync for an existing config: missing browser origins,
+ * an unset publicOrigin, and, when the operator never set one, the proxy trust
+ * list. Returns the same object when nothing is missing so callers can skip
+ * the write.
  */
-export function planOriginSync(config, rawOrigins) {
+export function planOriginSync(config, rawOrigins, { trustedProxies = [] } = {}) {
   const origins = [];
   for (const raw of rawOrigins) {
     const origin = normalizeOrigin(raw);
@@ -138,21 +165,34 @@ export function planOriginSync(config, rawOrigins) {
     typeof gateway.publicOrigin === "string" && gateway.publicOrigin.trim()
       ? undefined
       : origins.find((origin) => origin.startsWith("https://"));
-  if (missing.length === 0 && !nextPublicOrigin) {
-    return { config, changed: false, added: [], publicOrigin: undefined };
+  // Only fill trustedProxies when the key is absent: an operator-authored list,
+  // including an empty one, is a deliberate security choice.
+  const nextTrustedProxies =
+    gateway.trustedProxies === undefined && trustedProxies.length > 0
+      ? [...trustedProxies]
+      : undefined;
+  if (missing.length === 0 && !nextPublicOrigin && !nextTrustedProxies) {
+    return { config, changed: false, added: [], publicOrigin: undefined, trustedProxies: undefined };
   }
   const next = {
     ...config,
     gateway: {
       ...gateway,
       ...(nextPublicOrigin ? { publicOrigin: nextPublicOrigin } : {}),
+      ...(nextTrustedProxies ? { trustedProxies: nextTrustedProxies } : {}),
       controlUi: {
         ...controlUi,
         ...(missing.length > 0 ? { allowedOrigins: [...existing, ...missing] } : {}),
       },
     },
   };
-  return { config: next, changed: true, added: missing, publicOrigin: nextPublicOrigin };
+  return {
+    config: next,
+    changed: true,
+    added: missing,
+    publicOrigin: nextPublicOrigin,
+    trustedProxies: nextTrustedProxies,
+  };
 }
 
 /** Reads the config file; JSON5 that plain JSON cannot parse is reported, not rewritten. */
@@ -189,6 +229,7 @@ export function writeConfigFile(configPath, config) {
 export function runBootstrap({ env = process.env, log = console } = {}) {
   const paths = resolveBootstrapPaths(env);
   const origins = resolvePublicOrigins(env);
+  const trustedProxies = resolveTrustedProxies(env);
   fs.mkdirSync(paths.stateDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(paths.workspaceDir, { recursive: true });
 
@@ -203,11 +244,17 @@ export function runBootstrap({ env = process.env, log = console } = {}) {
 
   if (existing.kind === "missing") {
     const auth = resolveAuthPlan(env);
-    const config = buildInitialConfig({ origins, workspaceDir: paths.workspaceDir, auth });
+    const config = buildInitialConfig({
+      origins,
+      workspaceDir: paths.workspaceDir,
+      auth,
+      trustedProxies,
+    });
     writeConfigFile(paths.configPath, config);
     log.info(
       `railway-bootstrap: wrote ${paths.configPath} (bind=lan, auth=${auth.mode}, ` +
-        `origins=${origins.length > 0 ? origins.join(",") : "none"}). ` +
+        `origins=${origins.length > 0 ? origins.join(",") : "none"}, ` +
+        `trustedProxies=${trustedProxies.length > 0 ? trustedProxies.join(",") : "none"}). ` +
         "Every setting in it is editable from the Control UI.",
     );
     if (auth.source === "generated") {
@@ -227,7 +274,7 @@ export function runBootstrap({ env = process.env, log = console } = {}) {
     return { action: "created", configPath: paths.configPath, auth: auth.mode, origins };
   }
 
-  const plan = planOriginSync(existing.config, origins);
+  const plan = planOriginSync(existing.config, origins, { trustedProxies });
   if (plan.changed) {
     writeConfigFile(paths.configPath, plan.config);
     const parts = [];
@@ -236,6 +283,9 @@ export function runBootstrap({ env = process.env, log = console } = {}) {
     }
     if (plan.publicOrigin) {
       parts.push(`set gateway.publicOrigin=${plan.publicOrigin}`);
+    }
+    if (plan.trustedProxies) {
+      parts.push(`set gateway.trustedProxies=${plan.trustedProxies.join(",")}`);
     }
     log.info(`railway-bootstrap: ${parts.join("; ")} in ${paths.configPath}.`);
   }
@@ -252,6 +302,7 @@ export function runBootstrap({ env = process.env, log = console } = {}) {
     configPath: paths.configPath,
     added: plan.added,
     publicOrigin: plan.publicOrigin,
+    trustedProxies: plan.trustedProxies,
   };
 }
 

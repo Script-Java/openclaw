@@ -3,7 +3,8 @@
 # Layers a first-boot bootstrap and a volume permission fix-up over the official
 # runtime image so the Gateway and Control UI come up on a fresh Railway service
 # without shell access. Builds in seconds because it does not compile the
-# monorepo; railway.json points Railway at this file. See docs/install/railway.mdx.
+# monorepo. Railway selects this file through the RAILWAY_DOCKERFILE_PATH
+# service variable (set in .railway/railway.ts). See docs/install/railway.mdx.
 #
 # To deploy a locally built image instead of the published one:
 #   docker build -t my-openclaw .
