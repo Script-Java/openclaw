@@ -43,6 +43,13 @@ if [ "$(id -u)" = "0" ]; then
     chown -h node:node "$LEGACY_SECRET_DIR"
   fi
 
+  # The Gateway keeps its fallback temp dir under ~/.cache. The -browser image
+  # variant ships that directory root-owned, so make sure node can write there.
+  install -d -m 0755 -o node -g node /home/node/.cache
+  if [ "$(stat -c %u /home/node)" != "$(id -u node)" ]; then
+    chown node:node /home/node
+  fi
+
   # The base image pre-creates an empty ~/.openclaw for its default volume
   # layout. On Railway the state lives on /data, and the leftover directory
   # makes `openclaw doctor` warn about split state directories, so drop it
