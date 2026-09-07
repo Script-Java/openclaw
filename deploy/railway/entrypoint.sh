@@ -40,6 +40,14 @@ if [ "$(id -u)" = "0" ]; then
     chown -h node:node "$LEGACY_SECRET_DIR"
   fi
 
+  # The base image pre-creates an empty ~/.openclaw for its default volume
+  # layout. On Railway the state lives on /data, and the leftover directory
+  # makes `openclaw doctor` warn about split state directories, so drop it
+  # while it is empty (rmdir refuses to remove anything that holds data).
+  if [ "$STATE_DIR" != "/home/node/.openclaw" ]; then
+    rmdir /home/node/.openclaw/workspace /home/node/.openclaw 2>/dev/null || true
+  fi
+
   # A Railway volume attaches to exactly one container, and this container has
   # just started, so any gateway lock left on it belongs to a previous container
   # that Railway stopped without a clean shutdown. PIDs restart in every
