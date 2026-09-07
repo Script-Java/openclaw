@@ -1,0 +1,35 @@
+# Railway deployment image for OpenClaw.
+#
+# Layers a first-boot bootstrap and a volume permission fix-up over the official
+# runtime image so the Gateway and Control UI come up on a fresh Railway service
+# without shell access. Builds in seconds because it does not compile the
+# monorepo; railway.json points Railway at this file. See docs/install/railway.mdx.
+#
+# To deploy a locally built image instead of the published one:
+#   docker build -t my-openclaw .
+#   docker build --build-arg OPENCLAW_BASE_IMAGE=my-openclaw -f Dockerfile.railway .
+ARG OPENCLAW_BASE_IMAGE="ghcr.io/openclaw/openclaw:2026.9.2"
+FROM ${OPENCLAW_BASE_IMAGE}
+
+# The entrypoint starts as root only to chown the Railway volume, then drops to
+# the image's unprivileged `node` user before running anything else.
+USER root
+
+COPY --chmod=0755 deploy/railway/entrypoint.sh /app/deploy/railway/entrypoint.sh
+COPY --chmod=0644 deploy/railway/bootstrap.mjs /app/deploy/railway/bootstrap.mjs
+
+# HOME is pinned because the root->node privilege drop does not rewrite it.
+# State, config, and workspace live on the Railway volume mounted at /data.
+ENV HOME=/home/node \
+    OPENCLAW_HOME=/home/node \
+    OPENCLAW_STATE_DIR=/data/.openclaw \
+    OPENCLAW_CONFIG_PATH=/data/.openclaw/openclaw.json \
+    OPENCLAW_WORKSPACE_DIR=/data/workspace \
+    NODE_ENV=production
+
+EXPOSE 8080
+
+# HEALTHCHECK is inherited from the base image (dist/docker-healthcheck.js);
+# Railway itself probes /startupz via railway.json.
+ENTRYPOINT ["tini", "-s", "--", "/app/deploy/railway/entrypoint.sh"]
+CMD []

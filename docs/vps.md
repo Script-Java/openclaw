@@ -25,7 +25,7 @@ tuning that applies everywhere.
   <Card title="Hostinger" href="/install/hostinger">VPS with one-click setup</Card>
   <Card title="Northflank" href="/install/northflank">One-click, browser setup</Card>
   <Card title="Oracle Cloud" href="/install/oracle">Always Free ARM tier</Card>
-  <Card title="Railway" href="/install/railway">One-click, browser setup</Card>
+  <Card title="Railway" href="/install/railway">Deploy from your repo or one-click; configure in the browser</Card>
   <Card title="Raspberry Pi" href="/install/raspberry-pi">ARM self-hosted</Card>
 </CardGroup>
 
