@@ -47,11 +47,14 @@ test("resolveAuthPlan prefers env token, then env password, then generates a tok
     mode: "password",
     source: "env",
   });
-  assert.deepEqual(resolveAuthPlan({}, () => "generated"), {
-    mode: "token",
-    source: "generated",
-    token: "generated",
-  });
+  assert.deepEqual(
+    resolveAuthPlan({}, () => "generated"),
+    {
+      mode: "token",
+      source: "generated",
+      token: "generated",
+    },
+  );
 });
 
 test("resolveTrustedProxies uses an explicit list, else Railway's edge range only on Railway", () => {
@@ -124,7 +127,11 @@ test("planOriginSync is additive, idempotent, and preserves operator settings", 
   ]);
   assert.equal(first.config.gateway.auth.token, "keep");
   assert.deepEqual(first.config.channels, existing.channels);
-  assert.deepEqual(existing.gateway.controlUi.allowedOrigins, ["https://old.example.com"], "input untouched");
+  assert.deepEqual(
+    existing.gateway.controlUi.allowedOrigins,
+    ["https://old.example.com"],
+    "input untouched",
+  );
 
   const second = planOriginSync(first.config, ["https://new.example.com"]);
   assert.equal(second.changed, false);
@@ -216,7 +223,10 @@ test("runBootstrap creates, then syncs, then leaves an operator-edited config al
     fs.writeFileSync(configPath, "// comment\n{ gateway: { mode: 'local' } }\n");
     const skipped = runBootstrap({ env, log: silentLog });
     assert.equal(skipped.action, "skipped");
-    assert.equal(fs.readFileSync(configPath, "utf8"), "// comment\n{ gateway: { mode: 'local' } }\n");
+    assert.equal(
+      fs.readFileSync(configPath, "utf8"),
+      "// comment\n{ gateway: { mode: 'local' } }\n",
+    );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

@@ -94,7 +94,11 @@ export function resolveTrustedProxies(env) {
   if (explicit.length > 0) {
     return explicit;
   }
-  if (trim(env.RAILWAY_ENVIRONMENT) || trim(env.RAILWAY_PROJECT_ID) || trim(env.RAILWAY_PUBLIC_DOMAIN)) {
+  if (
+    trim(env.RAILWAY_ENVIRONMENT) ||
+    trim(env.RAILWAY_PROJECT_ID) ||
+    trim(env.RAILWAY_PUBLIC_DOMAIN)
+  ) {
     return [...RAILWAY_PROXY_CIDRS];
   }
   return [];
@@ -172,7 +176,13 @@ export function planOriginSync(config, rawOrigins, { trustedProxies = [] } = {})
       ? [...trustedProxies]
       : undefined;
   if (missing.length === 0 && !nextPublicOrigin && !nextTrustedProxies) {
-    return { config, changed: false, added: [], publicOrigin: undefined, trustedProxies: undefined };
+    return {
+      config,
+      changed: false,
+      added: [],
+      publicOrigin: undefined,
+      trustedProxies: undefined,
+    };
   }
   const next = {
     ...config,
@@ -211,7 +221,9 @@ export function readConfigFile(configPath) {
   }
   try {
     const parsed = JSON.parse(raw);
-    return isRecord(parsed) ? { kind: "ok", config: parsed } : { kind: "invalid", error: "not an object" };
+    return isRecord(parsed)
+      ? { kind: "ok", config: parsed }
+      : { kind: "invalid", error: "not an object" };
   } catch (error) {
     return { kind: "invalid", error: error instanceof Error ? error.message : String(error) };
   }
