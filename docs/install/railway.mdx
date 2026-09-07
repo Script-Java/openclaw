@@ -111,6 +111,7 @@ After the first boot the only Railway-side settings are the volume, the port, an
 
 - **Settings** groups the common fields per area with an **Advanced** disclosure for the rest; **Settings → Config** renders a form from the live config schema, including plugin and channel schemas, and has a **Raw JSON** editor for anything the form does not cover. See [Configuration](/gateway/configuration).
 - **Models and API keys**: **Settings → Models** or the model setup page. Keys are saved to `openclaw.json` on the volume. To keep a key in a Railway variable instead, store a reference such as `{ "source": "env", "provider": "default", "id": "OPENAI_API_KEY" }` under `models.providers.<id>.apiKey` and add the variable in Railway. See [Secrets](/gateway/secrets).
+- **OpenRouter model ids**: choose concrete ids such as `openrouter/deepseek/deepseek-v4-flash`. The `~vendor/model-latest` aliases in the catalog can have no serving endpoints, in which case the connection probe reports a generic failure even though the key is valid.
 - **Channels** (Telegram, Discord, Slack, WhatsApp, ...): **Settings → Channels**. See [Channels](/channels).
 - **Agents, tools, sandboxing, cron, hooks, plugins, MCP servers, skills**: their Settings pages, all backed by the same config file.
 - Changes hot-apply where the schema allows it; the UI reports when a Gateway restart is needed. **Settings → Updates** restarts the Gateway.
