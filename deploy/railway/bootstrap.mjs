@@ -116,15 +116,51 @@ export function resolveAuthPlan(env, generateToken = () => randomBytes(32).toStr
 }
 
 /**
- * Settings a headless container needs for the agent's browser and web research
- * to work out of the box. Chromium cannot show a window or use its sandbox
- * inside the container, and DuckDuckGo is the only key-free search provider.
- * Applied on first boot and filled in later only where the key is absent.
+ * Settings a headless container needs for the agent's browser to work out of
+ * the box: Chromium cannot show a window or use its sandbox inside the
+ * container. Applied on first boot and filled in later only where the key is
+ * absent. Web search is left to the Gateway's provider auto-detection because
+ * the published image ships no key-free search plugin.
  */
 export const CONTAINER_DEFAULTS = {
   browser: { enabled: true, headless: true, noSandbox: true },
-  webSearchProvider: "duckduckgo",
 };
+
+/**
+ * An earlier bootstrap wrote `tools.web.search.provider: "duckduckgo"`, which
+ * the Gateway rejects at startup when that plugin is not installed. Returns a
+ * config without that value when the plugin directory is missing, so a volume
+ * carrying the old default boots again; an operator who installed the plugin
+ * keeps the setting.
+ */
+export function repairUnavailableSearchProvider(config, pluginInstalled) {
+  const tools = isRecord(config.tools) ? config.tools : undefined;
+  const web = tools && isRecord(tools.web) ? tools.web : undefined;
+  const search = web && isRecord(web.search) ? web.search : undefined;
+  if (!search || search.provider !== "duckduckgo" || pluginInstalled) {
+    return { config, repaired: false };
+  }
+  const { provider: _provider, ...restSearch } = search;
+  const nextWeb = { ...web };
+  if (Object.keys(restSearch).length > 0) {
+    nextWeb.search = restSearch;
+  } else {
+    delete nextWeb.search;
+  }
+  const nextTools = { ...tools };
+  if (Object.keys(nextWeb).length > 0) {
+    nextTools.web = nextWeb;
+  } else {
+    delete nextTools.web;
+  }
+  const next = { ...config };
+  if (Object.keys(nextTools).length > 0) {
+    next.tools = nextTools;
+  } else {
+    delete next.tools;
+  }
+  return { config: next, repaired: true };
+}
 
 /** Builds the first `openclaw.json`. Every key here is editable later in the Control UI. */
 export function buildInitialConfig({
@@ -163,17 +199,14 @@ export function buildInitialConfig({
 }
 
 function containerDefaultsConfig(defaults) {
-  return {
-    browser: { ...defaults.browser },
-    tools: { web: { search: { provider: defaults.webSearchProvider } } },
-  };
+  return { browser: { ...defaults.browser } };
 }
 
 /**
  * Computes the additive sync for an existing config: missing browser origins,
  * an unset publicOrigin, and, when the operator never set them, the proxy
- * trust list and the container browser/search defaults. Returns the same
- * object when nothing is missing so callers can skip the write.
+ * trust list and the container browser defaults. Returns the same object when
+ * nothing is missing so callers can skip the write.
  */
 export function planOriginSync(
   config,
@@ -204,8 +237,8 @@ export function planOriginSync(
     gateway.trustedProxies === undefined && trustedProxies.length > 0
       ? [...trustedProxies]
       : undefined;
-  // Container defaults fill only absent keys: a `browser` block of any shape or
-  // an authored search provider is the operator's choice and stays untouched.
+  // Container defaults fill only absent keys: a `browser` block of any shape is
+  // the operator's choice and stays untouched.
   const defaultsApplied = [];
   const nextBrowser =
     containerDefaults && config.browser === undefined
@@ -213,16 +246,6 @@ export function planOriginSync(
       : undefined;
   if (nextBrowser) {
     defaultsApplied.push("browser");
-  }
-  const tools = isRecord(config.tools) ? config.tools : {};
-  const toolsWeb = isRecord(tools.web) ? tools.web : {};
-  const toolsWebSearch = isRecord(toolsWeb.search) ? toolsWeb.search : {};
-  const nextSearchProvider =
-    containerDefaults && toolsWebSearch.provider === undefined
-      ? containerDefaults.webSearchProvider
-      : undefined;
-  if (nextSearchProvider) {
-    defaultsApplied.push("tools.web.search.provider");
   }
   if (
     missing.length === 0 &&
@@ -251,14 +274,6 @@ export function planOriginSync(
       },
     },
     ...(nextBrowser ? { browser: nextBrowser } : {}),
-    ...(nextSearchProvider
-      ? {
-          tools: {
-            ...tools,
-            web: { ...toolsWeb, search: { ...toolsWebSearch, provider: nextSearchProvider } },
-          },
-        }
-      : {}),
   };
   return {
     config: next,
@@ -351,13 +366,24 @@ export function runBootstrap({ env = process.env, log = console } = {}) {
     return { action: "created", configPath: paths.configPath, auth: auth.mode, origins };
   }
 
-  const plan = planOriginSync(existing.config, origins, {
+  const repair = repairUnavailableSearchProvider(
+    existing.config,
+    fs.existsSync(
+      trim(env.OPENCLAW_RAILWAY_DUCKDUCKGO_PLUGIN_DIR) || "/app/dist/extensions/duckduckgo",
+    ),
+  );
+  const plan = planOriginSync(repair.config, origins, {
     trustedProxies,
     containerDefaults: CONTAINER_DEFAULTS,
   });
-  if (plan.changed) {
+  if (plan.changed || repair.repaired) {
     writeConfigFile(paths.configPath, plan.config);
     const parts = [];
+    if (repair.repaired) {
+      parts.push(
+        "removed tools.web.search.provider=duckduckgo (plugin not installed in this image)",
+      );
+    }
     if (plan.added.length > 0) {
       parts.push(`added ${plan.added.join(",")} to gateway.controlUi.allowedOrigins`);
     }
@@ -381,12 +407,13 @@ export function runBootstrap({ env = process.env, log = console } = {}) {
     );
   }
   return {
-    action: plan.changed ? "updated" : "unchanged",
+    action: plan.changed || repair.repaired ? "updated" : "unchanged",
     configPath: paths.configPath,
     added: plan.added,
     publicOrigin: plan.publicOrigin,
     trustedProxies: plan.trustedProxies,
     defaultsApplied: plan.defaultsApplied,
+    repairedSearchProvider: repair.repaired,
   };
 }
 

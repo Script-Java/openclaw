@@ -9,6 +9,7 @@ import {
   normalizeOrigin,
   planOriginSync,
   readConfigFile,
+  repairUnavailableSearchProvider,
   resolveAuthPlan,
   resolvePublicOrigins,
   resolveTrustedProxies,
@@ -87,7 +88,6 @@ test("buildInitialConfig records origins, publicOrigin, and trusted proxies, kee
     },
     agents: { defaults: { workspace: "/data/workspace" } },
     browser: { enabled: true, headless: true, noSandbox: true },
-    tools: { web: { search: { provider: "duckduckgo" } } },
   });
   const bare = buildInitialConfig({
     origins: [],
@@ -179,11 +179,8 @@ test("planOriginSync fills trustedProxies only when the key is absent", () => {
   assert.equal(explicitEmpty.changed, false, "an operator-authored empty list is respected");
 });
 
-test("planOriginSync fills container browser and search defaults only where absent", () => {
-  const defaults = {
-    browser: { enabled: true, headless: true, noSandbox: true },
-    webSearchProvider: "duckduckgo",
-  };
+test("planOriginSync fills the container browser defaults only when browser is absent", () => {
+  const defaults = { browser: { enabled: true, headless: true, noSandbox: true } };
   const base = {
     gateway: {
       publicOrigin: "https://a.example.com",
@@ -196,31 +193,78 @@ test("planOriginSync fills container browser and search defaults only where abse
     containerDefaults: defaults,
   });
   assert.equal(filled.changed, true);
-  assert.deepEqual(filled.defaultsApplied, ["browser", "tools.web.search.provider"]);
+  assert.deepEqual(filled.defaultsApplied, ["browser"]);
   assert.deepEqual(filled.config.browser, defaults.browser);
-  assert.deepEqual(filled.config.tools, { web: { search: { provider: "duckduckgo" } } });
+  assert.equal(filled.config.tools, undefined, "no search provider is invented");
 
-  const operatorOwned = {
-    ...base,
-    browser: { headless: false },
-    tools: { profile: "coding", web: { fetch: { enabled: true }, search: { provider: "brave" } } },
-  };
+  const operatorOwned = { ...base, browser: { headless: false } };
   const untouched = planOriginSync(operatorOwned, ["https://a.example.com"], {
     trustedProxies: ["100.64.0.0/10"],
     containerDefaults: defaults,
   });
   assert.equal(untouched.changed, false);
   assert.equal(untouched.config, operatorOwned);
+});
 
-  const partialTools = { ...base, tools: { profile: "coding", web: { fetch: { enabled: true } } } };
-  const merged = planOriginSync(partialTools, ["https://a.example.com"], {
-    trustedProxies: ["100.64.0.0/10"],
-    containerDefaults: defaults,
-  });
-  assert.deepEqual(merged.config.tools, {
-    profile: "coding",
-    web: { fetch: { enabled: true }, search: { provider: "duckduckgo" } },
-  });
+test("repairUnavailableSearchProvider drops only a duckduckgo provider whose plugin is missing", () => {
+  const withProvider = {
+    gateway: { mode: "local" },
+    tools: {
+      profile: "coding",
+      web: { fetch: { enabled: true }, search: { provider: "duckduckgo" } },
+    },
+  };
+  const repaired = repairUnavailableSearchProvider(withProvider, false);
+  assert.equal(repaired.repaired, true);
+  assert.deepEqual(repaired.config.tools, { profile: "coding", web: { fetch: { enabled: true } } });
+  assert.deepEqual(withProvider.tools.web.search, { provider: "duckduckgo" }, "input untouched");
+
+  const onlyProvider = { tools: { web: { search: { provider: "duckduckgo" } } } };
+  assert.deepEqual(repairUnavailableSearchProvider(onlyProvider, false).config, {});
+
+  const installed = repairUnavailableSearchProvider(withProvider, true);
+  assert.equal(installed.repaired, false);
+  assert.equal(installed.config, withProvider);
+
+  const brave = { tools: { web: { search: { provider: "brave" } } } };
+  assert.equal(repairUnavailableSearchProvider(brave, false).repaired, false);
+});
+
+test("runBootstrap repairs a volume config that carries the retired duckduckgo default", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-railway-"));
+  try {
+    const env = {
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      OPENCLAW_WORKSPACE_DIR: path.join(root, "workspace"),
+      OPENCLAW_GATEWAY_TOKEN: "env-token",
+      RAILWAY_PUBLIC_DOMAIN: "svc.up.railway.app",
+      OPENCLAW_RAILWAY_DUCKDUCKGO_PLUGIN_DIR: path.join(root, "no-such-plugin"),
+    };
+    fs.mkdirSync(path.join(root, "state"), { recursive: true });
+    const configPath = path.join(root, "state", "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        gateway: {
+          mode: "local",
+          publicOrigin: "https://svc.up.railway.app",
+          trustedProxies: ["100.64.0.0/10"],
+          controlUi: { allowedOrigins: ["https://svc.up.railway.app"] },
+        },
+        browser: { enabled: true, headless: true, noSandbox: true },
+        tools: { web: { search: { provider: "duckduckgo" } } },
+      }),
+    );
+    const result = runBootstrap({ env, log: silentLog });
+    assert.equal(result.action, "updated");
+    assert.equal(result.repairedSearchProvider, true);
+    assert.equal(readConfigFile(configPath).config.tools, undefined);
+
+    const again = runBootstrap({ env, log: silentLog });
+    assert.equal(again.action, "unchanged");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("runBootstrap creates, then syncs, then leaves an operator-edited config alone", () => {
@@ -251,7 +295,7 @@ test("runBootstrap creates, then syncs, then leaves an operator-edited config al
     assert.deepEqual(synced.defaultsApplied, [], "defaults were already written at creation");
     const afterSync = readConfigFile(configPath).config;
     assert.deepEqual(afterSync.browser, { enabled: true, headless: true, noSandbox: true });
-    assert.equal(afterSync.tools.web.search.provider, "duckduckgo");
+    assert.equal(afterSync.tools, undefined);
     assert.deepEqual(afterSync.gateway.controlUi.allowedOrigins, ["https://svc.up.railway.app"]);
     assert.equal(afterSync.gateway.publicOrigin, "https://svc.up.railway.app");
     assert.deepEqual(afterSync.gateway.trustedProxies, ["100.64.0.0/10"]);
