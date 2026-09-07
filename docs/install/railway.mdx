@@ -157,7 +157,7 @@ Google Sheets, Drive, Docs, Gmail, and Calendar go through the `gog` CLI, which 
   </Step>
 </Steps>
 
-**Google Places** is baked in too, through the `goplaces` CLI behind the bundled `goplaces` skill, for structured local-business research (search, details, opening status, and whether a place lists a website). In the same Cloud project enable **Places API (New)**, create an **API key**, and paste it as `GOOGLE_PLACES_API_KEY` under **Plugins → Skills → goplaces** in the Control UI. Google bills Places calls per request beyond its monthly free allowance, so restrict the key to the Places API in the console.
+**Google Places** is baked in too, through the `goplaces` CLI behind the bundled `goplaces` skill, for structured local-business research (search, details, opening status, and whether a place lists a website). In the same Cloud project enable **Places API (New)**, create an **API key**, and paste it as `GOOGLE_PLACES_API_KEY` under **Plugins → Skills → goplaces** in the Control UI. Google bills Places calls per request beyond its monthly free allowance, so restrict the key to the Places API in the console. Without a key, the agent can still find businesses key-free through OpenStreetMap's Overpass API and verify each one with a `web_fetch` search; the data is thinner (few phone numbers), and the browser tool remains available for directory sites, which often block automation.
 
 ### Environment variables
 
