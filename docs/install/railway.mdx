@@ -45,7 +45,9 @@ Do not configure a Railway healthcheck path. Railway probes only at deploy time,
     ```bash
     railway login
     railway init --name openclaw
-    railway add --service openclaw --variables "OPENCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32)"
+    railway add --service openclaw \
+      --variables "OPENCLAW_GATEWAY_TOKEN=$(openssl rand -hex 32)" \
+      --variables "PORT=8080" --variables "OPENCLAW_GATEWAY_PORT=8080"
     ```
 
     The token is your admin secret for the Gateway and Control UI. If you skip it, the bootstrap generates one, stores it in `openclaw.json`, and prints it once in the deploy logs.
@@ -89,8 +91,16 @@ Do not configure a Railway healthcheck path. Railway probes only at deploy time,
 
   </Step>
 
-  <Step title="Connect">
-    Open `https://<your-domain>/`, go to **Settings → Connection**, and paste the token. From here on, use the UI.
+  <Step title="Connect and pair the browser">
+    Open `https://<your-domain>/`, paste the token when the UI asks for it, and click **Connect**. The first browser then needs one-time device pairing; approve it from a Railway shell (the CLI runs as `node` so the Gateway keeps ownership of its files):
+
+    ```bash
+    railway ssh -- sh -c "su node -s /bin/sh -c 'openclaw devices list'"
+    railway ssh -- sh -c "su node -s /bin/sh -c 'openclaw devices approve <requestId>'"
+    ```
+
+    Reconnect after the approval. From here on, use the UI.
+
   </Step>
 </Steps>
 
@@ -115,7 +125,7 @@ Some Gateway fields can lock you out of the Control UI if changed on Railway: `g
 | `RAILWAY_DOCKERFILE_PATH`         | Required    | `Dockerfile.railway`; set by `.railway/railway.ts`. Tells Railway which Dockerfile to build                                              |
 | `OPENCLAW_GATEWAY_TOKEN`          | Recommended | Shared admin secret for the Gateway and Control UI. Without it, a token is generated on first boot, stored in `openclaw.json`, and logged once |
 | `OPENCLAW_GATEWAY_PASSWORD`       | Optional    | Use password auth instead of a token on first boot (only when no token is set)                                                           |
-| `PORT`                            | Optional    | Listening port; defaults to `8080`. Must match the domain's target port                                                                  |
+| `PORT`, `OPENCLAW_GATEWAY_PORT`   | Recommended | Set both to `8080` so Railway's router, the Gateway, and the CLI in `railway ssh` sessions agree on one port. Without them Railway injects a random `PORT` and CLI commands need `OPENCLAW_GATEWAY_PORT=$PORT` |
 | `OPENCLAW_PUBLIC_ORIGIN`          | Optional    | Custom domain origin (`https://claw.example.com`) to allow for the Control UI and use as `gateway.publicOrigin`                           |
 | `OPENCLAW_CONTROL_UI_ORIGINS`     | Optional    | Comma-separated extra browser origins to allow                                                                                           |
 | `OPENCLAW_TRUSTED_PROXIES`        | Optional    | Comma-separated proxy IPs or CIDRs for `gateway.trustedProxies`. Defaults to Railway's edge range `100.64.0.0/10`, without which the Gateway rejects all proxied requests |

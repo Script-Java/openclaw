@@ -31,6 +31,10 @@ export default defineRailway(() => {
     },
     env: {
       RAILWAY_DOCKERFILE_PATH: "Dockerfile.railway",
+      // One fixed port for Railway's router, the Gateway, and the CLI inside
+      // `railway ssh` sessions (which reads OPENCLAW_GATEWAY_PORT).
+      PORT: "8080",
+      OPENCLAW_GATEWAY_PORT: "8080",
       // Set once with `railway variable set OPENCLAW_GATEWAY_TOKEN=...`;
       // preserve() keeps the value on Railway instead of in source.
       OPENCLAW_GATEWAY_TOKEN: preserve(),
