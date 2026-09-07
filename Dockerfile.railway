@@ -42,6 +42,27 @@ RUN set -eu; \
     rm -rf /tmp/gog.tar.gz /tmp/gog-extract; \
     /usr/local/bin/gog --version
 
+# goplaces: Google Places API (New) CLI behind the bundled `goplaces` skill, used
+# for structured local-business research. Needs GOOGLE_PLACES_API_KEY at runtime
+# (set it under Plugins -> Skills -> goplaces in the Control UI).
+ARG GOPLACES_VERSION=0.4.9
+ARG GOPLACES_SHA256_AMD64=e7d5db4927c2da8cc443016120a02fdd8062391644715b2df32f7870722ea4ac
+ARG GOPLACES_SHA256_ARM64=a83e1c0612f7f18bfc93cb2ac1174b553609c2f6159ae97037df3a12a362a4e1
+RUN set -eu; \
+    case "${TARGETARCH:-amd64}" in \
+      amd64) sha="$GOPLACES_SHA256_AMD64" ;; \
+      arm64) sha="$GOPLACES_SHA256_ARM64" ;; \
+      *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL --retry 3 -o /tmp/goplaces.tar.gz \
+      "https://github.com/openclaw/goplaces/releases/download/v${GOPLACES_VERSION}/goplaces_${GOPLACES_VERSION}_linux_${TARGETARCH:-amd64}.tar.gz"; \
+    echo "$sha  /tmp/goplaces.tar.gz" | sha256sum -c -; \
+    mkdir -p /tmp/goplaces-extract; \
+    tar -xzf /tmp/goplaces.tar.gz -C /tmp/goplaces-extract; \
+    install -m 0755 "$(find /tmp/goplaces-extract -type f -name goplaces | head -n 1)" /usr/local/bin/goplaces; \
+    rm -rf /tmp/goplaces.tar.gz /tmp/goplaces-extract; \
+    /usr/local/bin/goplaces --version
+
 COPY --chmod=0755 deploy/railway/entrypoint.sh /app/deploy/railway/entrypoint.sh
 COPY --chmod=0644 deploy/railway/bootstrap.mjs /app/deploy/railway/bootstrap.mjs
 
