@@ -65,6 +65,8 @@ RUN set -eu; \
 
 COPY --chmod=0755 deploy/railway/entrypoint.sh /app/deploy/railway/entrypoint.sh
 COPY --chmod=0644 deploy/railway/bootstrap.mjs /app/deploy/railway/bootstrap.mjs
+# Workspace skills seeded into the agent workspace on first boot (see entrypoint).
+COPY --chmod=0644 deploy/railway/skills /app/deploy/railway/skills
 
 # HOME is pinned because the root->node privilege drop does not rewrite it.
 # State, config, and workspace live on the Railway volume mounted at /data.

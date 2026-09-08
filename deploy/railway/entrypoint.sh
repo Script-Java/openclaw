@@ -58,6 +58,21 @@ if [ "$(id -u)" = "0" ]; then
     rmdir /home/node/.openclaw/workspace /home/node/.openclaw 2>/dev/null || true
   fi
 
+  # Seed the workspace skills shipped with the image on first boot only; after
+  # that the copies on the volume belong to the operator (editable in the UI).
+  if [ -d /app/deploy/railway/skills ]; then
+    for skill_dir in /app/deploy/railway/skills/*/; do
+      [ -d "$skill_dir" ] || continue
+      skill_name="$(basename "$skill_dir")"
+      if [ ! -e "$WORKSPACE_DIR/skills/$skill_name" ]; then
+        mkdir -p "$WORKSPACE_DIR/skills"
+        cp -R "$skill_dir" "$WORKSPACE_DIR/skills/$skill_name"
+        chown -R node:node "$WORKSPACE_DIR/skills"
+        echo "railway-entrypoint: seeded workspace skill $skill_name"
+      fi
+    done
+  fi
+
   # A Railway volume attaches to exactly one container, and this container has
   # just started, so any gateway lock left on it belongs to a previous container
   # that Railway stopped without a clean shutdown. PIDs restart in every

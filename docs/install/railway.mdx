@@ -157,6 +157,8 @@ Google Sheets, Drive, Docs, Gmail, and Calendar go through the `gog` CLI, which 
   </Step>
 </Steps>
 
+**Local-business prospecting without any key** ships as a workspace skill, `no-website-prospecting`, seeded into the agent workspace on first boot from `deploy/railway/skills/` and editable afterwards under **Plugins → Skills**. Its bundled script opens Google Maps in the server's headless Chromium, scrolls the entire results list, and returns every listing with its category, phone, rating, and website link, so the agent can list businesses that have no website with one command instead of a screenshot loop. Ask, for example, "find power washing businesses in McKinney, TX with no website and save them to a sheet."
+
 **Google Places** is baked in too, through the `goplaces` CLI behind the bundled `goplaces` skill, for structured local-business research (search, details, opening status, and whether a place lists a website). In the same Cloud project enable **Places API (New)**, create an **API key**, and paste it as `GOOGLE_PLACES_API_KEY` under **Plugins → Skills → goplaces** in the Control UI. Google bills Places calls per request beyond its monthly free allowance, so restrict the key to the Places API in the console. Without a key, the agent can still find businesses key-free through OpenStreetMap's Overpass API and verify each one with a `web_fetch` search; the data is thinner (few phone numbers), and the browser tool remains available for directory sites, which often block automation.
 
 ### Environment variables
