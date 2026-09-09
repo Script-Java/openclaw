@@ -40,8 +40,8 @@ function findChromium() {
   const dirs = fs.existsSync(root) ? fs.readdirSync(root) : [];
   for (const dir of dirs
     .filter((d) => d.startsWith("chromium-"))
-    .sort()
-    .reverse()) {
+    .toSorted()
+    .toReversed()) {
     for (const rel of ["chrome-linux/chrome", "chrome-linux64/chrome"]) {
       const candidate = path.join(root, dir, rel);
       if (fs.existsSync(candidate)) {
@@ -81,6 +81,7 @@ try {
   const bodyText = (
     await page
       .locator("body")
+      // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- Playwright locator API; rendered text is what the visitor sees
       .innerText()
       .catch(() => "")
   ).slice(0, 2000);
@@ -152,17 +153,17 @@ try {
           (l) =>
             l.includes("·") && !/\d{3}[ .-]\d{4}/.test(l) && !/★|stars?\b/.test(l) && !isHours(l),
         );
-        let category = "";
+        let cardCategory = "";
         let address = "";
         if (dotted) {
           const parts = dotted
             .split("·")
             .map((p) => p.trim())
             .filter(Boolean);
-          category = parts[0] || "";
+          cardCategory = parts[0] || "";
           address = parts.slice(1).join(", ");
         }
-        if (!category) {
+        if (!cardCategory) {
           // Service-area businesses show the category on its own line, without an address.
           const plain = lines.find(
             (l) =>
@@ -173,11 +174,11 @@ try {
               !/^No reviews/i.test(l) &&
               l.length < 45,
           );
-          category = plain || "";
+          cardCategory = plain || "";
         }
         out.push({
           name,
-          category,
+          category: cardCategory,
           rating,
           reviews,
           phone,

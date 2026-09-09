@@ -58,17 +58,25 @@ if [ "$(id -u)" = "0" ]; then
     rmdir /home/node/.openclaw/workspace /home/node/.openclaw 2>/dev/null || true
   fi
 
-  # Seed the workspace skills shipped with the image on first boot only; after
-  # that the copies on the volume belong to the operator (editable in the UI).
+  # Seed the workspace skills shipped with the image. A skill copied from the
+  # image carries a .seeded-from-image marker and is refreshed on every boot so
+  # script fixes ship with a redeploy; a skill of the same name that the
+  # operator created (no marker) is left alone.
   if [ -d /app/deploy/railway/skills ]; then
     for skill_dir in /app/deploy/railway/skills/*/; do
       [ -d "$skill_dir" ] || continue
       skill_name="$(basename "$skill_dir")"
-      if [ ! -e "$WORKSPACE_DIR/skills/$skill_name" ]; then
+      dest="$WORKSPACE_DIR/skills/$skill_name"
+      if [ ! -e "$dest" ]; then
         mkdir -p "$WORKSPACE_DIR/skills"
-        cp -R "$skill_dir" "$WORKSPACE_DIR/skills/$skill_name"
+        cp -R "$skill_dir" "$dest"
+        : > "$dest/.seeded-from-image"
         chown -R node:node "$WORKSPACE_DIR/skills"
         echo "railway-entrypoint: seeded workspace skill $skill_name"
+      elif [ -f "$dest/.seeded-from-image" ]; then
+        cp -R "$skill_dir". "$dest"/
+        chown -R node:node "$dest"
+        echo "railway-entrypoint: refreshed workspace skill $skill_name from image"
       fi
     done
   fi

@@ -157,9 +157,30 @@ Google Sheets, Drive, Docs, Gmail, and Calendar go through the `gog` CLI, which 
   </Step>
 </Steps>
 
-**Local-business prospecting without any key** ships as a workspace skill, `no-website-prospecting`, seeded into the agent workspace on first boot from `deploy/railway/skills/` and editable afterwards under **Plugins → Skills**. Its bundled script opens Google Maps in the server's headless Chromium, scrolls the entire results list, and returns every listing with its category, phone, rating, and website link, so the agent can list businesses that have no website with one command instead of a screenshot loop. Ask, for example, "find power washing businesses in McKinney, TX with no website and save them to a sheet."
+**Local-business prospecting without any key** ships as a workspace skill, `no-website-prospecting`, seeded into the agent workspace from `deploy/railway/skills/` (and refreshed from the image on every boot while its `.seeded-from-image` marker exists) and editable afterwards under **Plugins → Skills**. Its bundled script opens Google Maps in the server's headless Chromium, scrolls the entire results list, and returns every listing with its category, phone, rating, and website link, so the agent can list businesses that have no website with one command instead of a screenshot loop. Ask, for example, "find power washing businesses in McKinney, TX with no website and save them to a sheet."
 
 **Google Places** is baked in too, through the `goplaces` CLI behind the bundled `goplaces` skill, for structured local-business research (search, details, opening status, and whether a place lists a website). In the same Cloud project enable **Places API (New)**, create an **API key**, and paste it as `GOOGLE_PLACES_API_KEY` under **Plugins → Skills → goplaces** in the Control UI. Google bills Places calls per request beyond its monthly free allowance, so restrict the key to the Places API in the console. Without a key, the agent can still find businesses key-free through OpenStreetMap's Overpass API and verify each one with a `web_fetch` search; the data is thinner (few phone numbers), and the browser tool remains available for directory sites, which often block automation.
+
+### Unattended daily prospecting
+
+The prospecting skill ships with a lead database and a batch runner so the research keeps going without anyone asking for it:
+
+- `scripts/leads_db.mjs` keeps a SQLite database at `/data/workspace/prospecting/leads.sqlite` (Node's built-in `node:sqlite`, so no extra service or cost). It stores every business checked, keyed by its Google Maps URL, a queue of `category × area` searches called targets, and run history. Re-running a search never duplicates a business, and the agent answers questions ("how many uncontacted roofers in Plano?") with `leads_db.mjs stats`, `leads`, or a read-only `sql` query instead of scraping again.
+- `scripts/prospect_batch.mjs` drains the queue: it runs the Maps extractor for the targets that have never run (then the stalest), records every listing, and stops after `--budget` listings (default 1000), when the queue is empty, or when Google blocks the browser. It writes the batch's new leads to `/data/workspace/prospecting/exports/<date>-new-leads.csv`, appends them to a Google Sheet when `PROSPECTING_SHEET_ID` is set and `gog` is authorized, and prints a short summary.
+
+Schedule it as an OpenClaw **command automation**, which runs inside the Gateway scheduler with no model call and delivers the summary to a chat. From `railway ssh`:
+
+```bash
+openclaw automations create "0 7 * * *"   --name "Daily prospecting"   --tz "America/Chicago"   --command-argv '["node","/data/workspace/skills/no-website-prospecting/scripts/prospect_batch.mjs","--budget","1000"]'   --command-cwd /data/workspace   --timeout-seconds 5400 --no-output-timeout-seconds 5400   --announce --channel telegram --to "<your Telegram user id>"
+```
+
+Seed the queue once (areas without commas; the lists are comma-separated):
+
+```bash
+node /data/workspace/skills/no-website-prospecting/scripts/leads_db.mjs targets add-many   --categories "power washing,roofing contractor,plumber,landscaping"   --areas "McKinney TX,Frisco TX,Allen TX,Plano TX"
+```
+
+After that the job appears under **Automations** in the Control UI, where you can change the schedule, pause it, run it now, or read run history. Ask the agent in chat to add or remove categories and cities; the skill tells it to edit the queue rather than scrape by hand. A run of 1000 listings is roughly 10 to 15 Maps searches with a random pause between them and takes 20 to 30 minutes. Google occasionally blocks datacenter traffic; the runner then stops, leaves the blocked target queued, and the summary says so, and the next morning's run picks it up again. Set `PROSPECTING_DAILY_BUDGET` as a Railway variable to change the default budget without editing the job.
 
 ### Environment variables
 
@@ -176,6 +197,8 @@ Google Sheets, Drive, Docs, Gmail, and Calendar go through the `gog` CLI, which 
 | `OPENCLAW_RAILWAY_SKIP_BOOTSTRAP` | Optional    | Set to `1` to start the Gateway without running the bootstrap                                                                                                                                                  |
 | `GOG_CLIENT_SECRET_JSON`          | Optional    | Google Desktop OAuth client JSON for the `gog` CLI (Sheets, Drive, Docs, Gmail, Calendar); stored for `gog` at every boot                                                                                      |
 | `GOG_KEYRING_PASSWORD`            | Optional    | Password for `gog`'s encrypted token keyring. When unset, one is generated on first boot and kept at `/data/gogcli/.keyring-password`; set it in Railway to keep it off the volume                             |
+| `PROSPECTING_DAILY_BUDGET`        | Optional    | Listings the daily prospecting batch checks per run when the automation does not pass `--budget` (default `1000`)                                                                                             |
+| `PROSPECTING_SHEET_ID`            | Optional    | Google Sheet id the daily prospecting batch appends new leads to (needs `gog` authorized for Sheets)                                                                                                            |
 
 `RAILWAY_PUBLIC_DOMAIN` is injected by Railway and read by the bootstrap; you do not set it.
 
